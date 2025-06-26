@@ -1,16 +1,8 @@
-# sandbox
+# Sandbox
 
-A new Flutter project.
+This repository serves as a sandbox for various simple widgets and experimental projects in Flutter. The goal is to explore different aspects of the Flutter framework by creating small, self-contained examples.
 
-## Getting Started
+## Custom Stepper Widget
+A custom `Stepper` widget, which demonstrates custom layout, painting and interaction using `RenderObject`.
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+![Stepper demo](.img/stepper_demo.gif)
