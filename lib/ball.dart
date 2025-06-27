@@ -83,7 +83,7 @@ class _GameWidgetState extends State<GameWidget> with SingleTickerProviderStateM
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('ESCAPED!', style: TextStyle(fontSize: 32)),
+              const Text('ESCAPED!', style: TextStyle(fontSize: 32, color: Colors.white)),
               const SizedBox(height: 16),
               ElevatedButton(onPressed: () => setState(_resetGame), child: const Text('Restart')),
             ],
@@ -119,6 +119,9 @@ class GameState {
 
   /// The total number of rings to pass through.
   final int ringCount = 20;
+
+  /// The number of particles to create for each ring explosion.
+  final particleCount = 5000;
 
   /// A flag indicating whether the game is finished.
   bool isFinished = false;
@@ -171,7 +174,6 @@ class GameState {
 
   /// Creates a particle explosion effect for the specified ring.
   void _explodeRing(Ring ring) {
-    const particleCount = 5000;
     final arcAngle = 2 * pi - 2 * ring.gapAngle;
     final angleIncrement = arcAngle / particleCount;
     for (var i = 0; i < particleCount; i++) {
@@ -184,7 +186,7 @@ class GameState {
         angle + (Random().nextDouble() - 0.5) * (pi / 2),
         speed,
       ); // Spread of 90 degrees (pi/2)
-      particles.add(Particle(position: position, velocity: velocity));
+      particles.add(Particle(position: position, velocity: velocity, color: Colors.orangeAccent));
     }
   }
 }
@@ -270,7 +272,7 @@ class Ball {
 /// {@endtemplate}
 class Particle {
   /// {@macro particle}
-  Particle({required this.position, required this.velocity, this.color = Colors.blueAccent, double lifespan = 180})
+  Particle({required this.position, required this.velocity, this.color = Colors.blueAccent, double lifespan = 360})
     : initialLifespan = lifespan,
       _lifespan = lifespan;
   final Offset _baseGravity = const Offset(0, 0.2);
@@ -358,13 +360,27 @@ class Ring {
 /// {@endtemplate}
 class GamePainter extends CustomPainter {
   /// {@macro game_painter}
-  GamePainter(this.state, {required this.fps, required this.textDirection, required this.textScaler});
+  GamePainter(this.state, {required this.fps, required this.textDirection, required this.textScaler})
+    : _points = Float32List(state.particleCount * 2);
 
   /// The current game state to be drawn.
   final GameState state;
   final double fps;
   final TextDirection textDirection;
   final TextScaler textScaler;
+
+  /// A list of points to draw particles using [drawRawPoints].
+  /// This is more efficient than drawing each particle individually,
+  /// especially when there are many particles.
+  final Float32List _points;
+
+  /// Paint used for drawing particles.
+  final Paint _particlePaint =
+      Paint()
+        ..strokeWidth = 1
+        ..style = PaintingStyle.fill
+        ..strokeCap = StrokeCap.square
+        ..isAntiAlias = true;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -446,22 +462,35 @@ class GamePainter extends CustomPainter {
       )
       ..restore(); // Restore the canvas state
 
-    final particlePaint =
-        Paint()
-          ..strokeWidth = 2
-          ..strokeCap = StrokeCap.round; // Create a Paint for the particles
-    final points = Float32List(state.particles.length * 2);
-    for (var i = 0; i < state.particles.length; i++) {
-      final particle = state.particles[i];
-      points[i * 2] = particle.position.dx;
-      points[i * 2 + 1] = particle.position.dy;
-      final alpha = (particle.lifespan / particle.initialLifespan).clamp(0.0, 1.0); // Alpha from 0.0 to 1.0
-      particlePaint.color = particle.color.withValues(alpha: alpha);
+    if (state.particles.isNotEmpty) {
+      canvas
+        ..save()
+        ..clipRect(Rect.fromLTWH(-size.width / 2, -size.height / 2, size.width, size.height));
+
+      _drawParticles(canvas, state.particles);
+      canvas.restore();
     }
-    // Draw particles using drawRawPoints
-    canvas.drawRawPoints(PointMode.points, points, particlePaint);
   }
 
   @override
   bool shouldRepaint(CustomPainter oldDelegate) => true;
+
+  /// Draws the particles on the canvas.
+  /// Uses [drawRawPoints] for better performance with a large number of particles.
+  /// The particles are drawn as points with a color that fades based on their lifespan.
+  void _drawParticles(Canvas canvas, List<Particle> particles) {
+    for (var batch = 0; batch < particles.length; batch += state.particleCount) {
+      final particle = particles[batch]; // Use the last particle to determine color
+      final alpha = (particle.lifespan / particle.initialLifespan).clamp(0.0, 1.0); // Alpha from 0.0 to 1.0
+
+      final particlePaint = _particlePaint..color = particle.color.withValues(alpha: alpha);
+      for (var i = 0; i < state.particleCount; i++) {
+        final particle = particles[i + batch];
+        _points[i * 2] = particle.position.dx;
+        _points[i * 2 + 1] = particle.position.dy;
+      }
+      // Draw particles using drawRawPoints
+      canvas.drawRawPoints(PointMode.points, _points, particlePaint);
+    }
+  }
 }
