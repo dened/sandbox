@@ -16,4 +16,4 @@ Performs well even with a large number of particles.
 ## Three State App Bar
 A three-state app bar that changes its appearance based on the scroll position of a `SliverList`. It uses a `SliverPositionNotifier` to track the scroll position and update the app bar's color dynamically. 
 
-![Three state app bar demo](.img/three_state_toolbar_demo.webm)
+![Three state app bar demo](.img/three_state_toolbar_demo.mp4)
