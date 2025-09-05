@@ -16,24 +16,9 @@ void main() => runZonedGuarded<void>(
 /// {@template app}
 /// App widget.
 /// {@endtemplate}
-class App extends StatefulWidget {
+class App extends StatelessWidget {
   /// {@macro app}
   const App({super.key});
-
-  @override
-  State<App> createState() => _AppState();
-}
-
-class _AppState extends State<App> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    // TODO: implement initState
-    super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 10));
-    _controller.repeat();
-  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -76,19 +61,22 @@ class ClockWidget extends LeafRenderObjectWidget {
 }
 
 class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
-  ClockRenderBox() : _clockPainter = _ArrowsPainter(), _dialPainter = _DialPainter();
+  ClockRenderBox() : _dialPainter = _DialPainter(), _centerPainter = _CenterPainter() {
+    _arrowsPainter = _ArrowsPainter(() => _currentTime);
+  }
 
-  final _ArrowsPainter _clockPainter;
   final _DialPainter _dialPainter;
+  late final _ArrowsPainter _arrowsPainter;
+  final _CenterPainter _centerPainter;
 
   /// Vsync loop ticker
   Ticker? _ticker;
-  Duration _lastElapsed = Duration.zero;
+  DateTime _currentTime = DateTime.now();
 
   void _onTick(Duration elapsed) {
-    /// Redraw only if the second has changed
-    if (elapsed.inSeconds != _lastElapsed.inSeconds) {
-      _lastElapsed = elapsed;
+    final now = DateTime.now();
+    if (now.second != _currentTime.second) {
+      _currentTime = now;
       markNeedsPaint();
     }
   }
@@ -105,17 +93,21 @@ class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
     /// Use the biggest size that fits within the constraints
     final size = constraints.biggest;
 
-    _dialPainter.layout(size);
-    _clockPainter.layout(size);
+    _preparePainters(size);
 
     return size;
+  }
+
+  void _preparePainters(Size size) {
+    _dialPainter.prepare(size);
+    _arrowsPainter.prepare(size);
+    _centerPainter.prepare(size);
   }
 
   @override
   void performLayout() {
     size = constraints.biggest;
-    _dialPainter.layout(size);
-    _clockPainter.layout(size);
+    _preparePainters(size);
   }
 
   @override
@@ -138,35 +130,71 @@ class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
           ..translate(offset.dx, offset.dy)
           ..clipRect(Rect.fromLTWH(0, 0, size.width, size.height));
 
-    _dialPainter.paintDial(canvas, size);
-    _clockPainter.paint(canvas, size, DateTime.now());
-    _dialPainter.paintCenter(canvas, size);
+    _dialPainter.paint(canvas, size);
+    _arrowsPainter.paint(canvas, size);
+    _centerPainter.paint(canvas, size);
 
     canvas.restore();
   }
 }
 
-/// A painter responsible for drawing Dial
-class _DialPainter {
+/// Base class for painters that draw a part of the clock.
+abstract class _ClockPartPainter {
+  /// Colors used in the clock.
+  final pinkColor = const Color(0xffff5876);
+  final grayColor = const Color(0xff405b6c);
+  final blueColor = const Color(0xff86dcff);
+
+  double _clockRadius = 0;
+
+  /// Radius of the clock, used for size-dependent calculations.
+  double get clockRadius => _clockRadius;
+
+  /// Pre-calculates size-dependent properties.
+  /// This is called whenever the clock's size changes.
+  @mustCallSuper
+  void prepare(Size size) {
+    _clockRadius = size.shortestSide / 2;
+  }
+
+  /// Paints the content on the canvas.
+  void paint(Canvas canvas, Size size);
+
+  /// Draws an inner shadow for a circular shape on the canvas.
+  @protected
+  void drawInnerShadow(Canvas canvas, double radius, double shadowSize) {
+    // Don't draw the shadow if the clock is too small for performance and visual clarity.
+    if (clockRadius < 128) return;
+
+    final shadowPaint = Paint()..color = Colors.black12;
+
+    // Create a shadow effect by subtracting a slightly translated circle from the main one.
+    final outer = Path()..addOval(Rect.fromCircle(center: Offset.zero, radius: radius));
+
+    // The inner circle is translated upwards to create a "cutout", resulting in a shadow at the top edge.
+    final inner = Path()..addOval(Rect.fromCircle(center: Offset.zero, radius: radius).translate(0, -shadowSize));
+
+    // The difference between the two paths creates the shadow shape.
+    canvas.drawPath(Path.combine(PathOperation.difference, outer, inner), shadowPaint);
+  }
+}
+
+/// A painter responsible for drawing the clock's dial.
+/// The dial is static and only changes when the size changes, so we cache it as a [Picture] for performance.
+class _DialPainter extends _ClockPartPainter {
   /// A cached Picture of the dial to optimize performance.
   Picture? _dialPicture;
 
-  /// A cached Picture of the pink center circle.
-  /// We use another Picture to avoid redrawing the center circle.
-  /// While we need draw arrows between dial and center circle.
-  Picture? _centerPicture;
+  @override
+  void prepare(Size size) {
+    super.prepare(size);
 
-  void layout(Size size) {
     final recorder = PictureRecorder();
     final canvas = Canvas(recorder)..translate(size.width / 2, size.height / 2);
 
-    final clockRadius = size.shortestSide / 2;
     final innerRadius = clockRadius * 0.835;
 
     final hourTickLength = clockRadius * .093;
-
-    const pinkColor = Color(0xffff5876);
-    const grayColor = Color(0xff405b6c);
 
     final tickPaint =
         Paint()
@@ -174,24 +202,7 @@ class _DialPainter {
           ..strokeWidth = clockRadius * .062
           ..strokeCap = StrokeCap.round;
 
-    final shadowPaint = Paint()..color = Colors.black12;
-
-    void drawInnerShadow(Canvas canvas, double radius, double shadowSize) {
-      /// If clock is small, do not draw shadow
-      if (clockRadius < 128) return;
-
-      /// Create two circles, one slightly smaller than the other
-      final outer = Path()..addOval(Rect.fromCircle(center: Offset.zero, radius: radius));
-
-      /// Translate the inner circle down to create a shadow effect
-      final inner = Path()..addOval(Rect.fromCircle(center: Offset.zero, radius: radius).translate(0, -shadowSize));
-
-      final path = Path.combine(PathOperation.difference, outer, inner);
-
-      canvas.drawPath(path, shadowPaint);
-    }
-
-    /// Record the dial
+    /// Records the main dial face (background circles and shadows).
     canvas
       ..drawCircle(Offset.zero, clockRadius, Paint()..color = pinkColor)
       ..drawCircle(Offset.zero, innerRadius, Paint()..color = const Color(0xffe4eef9));
@@ -199,78 +210,94 @@ class _DialPainter {
     drawInnerShadow(canvas, clockRadius, clockRadius * 0.08);
     drawInnerShadow(canvas, innerRadius, innerRadius * 0.08);
 
-    /// Record hours ticks
-    {
-      final tickRadius = clockRadius * .73;
-      for (var h = 0; h < 12; h += 3) {
-        final angle = -math.pi / 2 + h * math.pi / 6;
+    /// Records the hour ticks.
+    final tickRadius = clockRadius * .73;
+    for (var h = 0; h < 12; h += 3) {
+      final angle = -math.pi / 2 + h * math.pi / 6;
 
-        final p1 = Offset(
-          (tickRadius - hourTickLength) * math.cos(angle),
-          (tickRadius - hourTickLength) * math.sin(angle),
-        );
+      final p1 = Offset(
+        (tickRadius - hourTickLength) * math.cos(angle),
+        (tickRadius - hourTickLength) * math.sin(angle),
+      );
 
-        final p2 = Offset(tickRadius * math.cos(angle), tickRadius * math.sin(angle));
+      final p2 = Offset(tickRadius * math.cos(angle), tickRadius * math.sin(angle));
 
-        canvas.drawLine(p1, p2, tickPaint);
-      }
+      canvas.drawLine(p1, p2, tickPaint);
     }
     _dialPicture = recorder.endRecording();
-
-    // Record center circle
-    {
-      final recorder = PictureRecorder();
-      final canvas = Canvas(recorder)..translate(size.width / 2, size.height / 2);
-
-      final centerRadius = clockRadius * 0.11;
-      canvas.drawCircle(Offset.zero, centerRadius, Paint()..color = pinkColor);
-      drawInnerShadow(canvas, centerRadius, centerRadius * 0.75);
-      _centerPicture = recorder.endRecording();
-    }
   }
 
-  /// Paints the recorded picture onto the given [canvas].
-  ///
-  /// This method is called during the paint phase of the [RenderBox].
-  void paintDial(Canvas canvas, Size size) {
-    // Draw the pre-recorded picture
+  @override
+  void paint(Canvas canvas, Size size) {
     if (_dialPicture case Picture picture) {
       canvas.drawPicture(picture);
     }
   }
+}
 
-  /// Paints the recorded picture onto the given [canvas].
-  ///
-  /// This method is called during the paint phase of the [RenderBox].
-  void paintCenter(Canvas canvas, Size size) {
-    // Draw the pre-recorded picture
+/// A painter for the central circle, drawn on top of the hands.
+class _CenterPainter extends _ClockPartPainter {
+  Picture? _centerPicture;
+
+  @override
+  void prepare(Size size) {
+    super.prepare(size);
+
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder)..translate(size.width / 2, size.height / 2);
+
+    final centerRadius = clockRadius * 0.11;
+    canvas.drawCircle(Offset.zero, centerRadius, Paint()..color = pinkColor);
+    drawInnerShadow(canvas, centerRadius, centerRadius * 0.75);
+    _centerPicture = recorder.endRecording();
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
     if (_centerPicture case Picture picture) {
       canvas.drawPicture(picture);
     }
   }
 }
 
-/// A painter responsible for drawing arrows
-class _ArrowsPainter {
-  _ArrowsPainter();
+/// A painter responsible for drawing the clock's hands (hour, minute, and second).
+///
+/// This painter handles the dynamic elements of the clock that change over time.
+/// It pre-calculates size-dependent properties in `prepare` to optimize the `paint` method.
+class _ArrowsPainter extends _ClockPartPainter {
+  _ArrowsPainter(DateTime Function() timeProvider) : _timeProvider = timeProvider;
 
+  /// Provides a time for drawing the hands.
+  final DateTime Function() _timeProvider;
+
+  /// Paint for the hour hand.
   late Paint _hourArrowPaint;
+
+  /// Paint for the minute hand.
   late Paint _minuteArrowPaint;
+
+  /// Paint for the second hand.
   late Paint _secondArrowPaint;
 
-  double _hourArrrowLenght = 0;
-  double _minuteArrrowLenght = 0;
-  double _secondArrrowLenght = 0;
+  /// Length of the hour hand.
+  double _hourArrowLength = 0;
 
-  void layout(Size size) {
-    final clockRadius = size.shortestSide / 2;
+  /// Length of the minute hand.
+  double _minuteArrowLength = 0;
 
-    _hourArrrowLenght = clockRadius * 0.36;
-    _minuteArrrowLenght = clockRadius * 0.54;
-    _secondArrrowLenght = clockRadius * 0.58;
+  /// Length of the second hand.
+  double _secondArrowLength = 0;
 
-    const grayColor = Color(0xff405b6c);
-    const blueColor = Color(0xff86dcff);
+  /// Pre-calculates size-dependent properties like hand lengths and paint styles.
+  /// This is called whenever the clock's size changes to avoid expensive calculations
+  /// during the frequent paint calls.
+  @override
+  void prepare(Size size) {
+    super.prepare(size);
+
+    _hourArrowLength = clockRadius * 0.36;
+    _minuteArrowLength = clockRadius * 0.54;
+    _secondArrowLength = clockRadius * 0.58;
 
     _hourArrowPaint =
         Paint()
@@ -291,36 +318,44 @@ class _ArrowsPainter {
           ..strokeCap = StrokeCap.round;
   }
 
-  void paint(Canvas canvas, Size size, DateTime date) {
+  /// Paints the clock hands on the canvas for a given date.
+  @override
+  void paint(Canvas canvas, Size size) {
     canvas
       ..save()
       ..translate(size.width / 2, size.height / 2);
+
+    final date = _timeProvider();
 
     final hour = date.hour;
     final minute = date.minute;
     final second = date.second;
 
+    // Calculate the angle for each hand.
+    // The starting point is -pi/2 radians (12 o'clock).
+    // An hour step is pi/6 radians (30 degrees).
     final hourAngle = -math.pi / 2 + (hour % 12 + minute / 60) * math.pi / 6;
+    // A minute/second step is pi/30 radians (6 degrees).
     final minuteAngle = -math.pi / 2 + (minute + second / 60) * math.pi / 30;
     final secondAngle = -math.pi / 2 + second * math.pi / 30;
 
-    // hour arrow
+    // Draw the hour hand.
     canvas
       ..drawLine(
         Offset.zero,
-        Offset(_hourArrrowLenght * math.cos(hourAngle), _hourArrrowLenght * math.sin(hourAngle)),
+        Offset(_hourArrowLength * math.cos(hourAngle), _hourArrowLength * math.sin(hourAngle)),
         _hourArrowPaint,
       )
-      // minute arrow
+      // Draw the minute hand.
       ..drawLine(
         Offset.zero,
-        Offset(_minuteArrrowLenght * math.cos(minuteAngle), _minuteArrrowLenght * math.sin(minuteAngle)),
+        Offset(_minuteArrowLength * math.cos(minuteAngle), _minuteArrowLength * math.sin(minuteAngle)),
         _minuteArrowPaint,
       )
-      // second arrow
+      // Draw the second hand.
       ..drawLine(
         Offset.zero,
-        Offset(_secondArrrowLenght * math.cos(secondAngle), _secondArrrowLenght * math.sin(secondAngle)),
+        Offset(_secondArrowLength * math.cos(secondAngle), _secondArrowLength * math.sin(secondAngle)),
         _secondArrowPaint,
       )
       ..restore();
