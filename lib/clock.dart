@@ -28,56 +28,81 @@ class App extends StatelessWidget {
       appBar: AppBar(title: const Text('Material App Bar')),
 
       body: const SafeArea(
-        // child: SingleChildScrollView(
-        //   child: Column(
-        //     children: [
-        //       for (int i = 1; i <= 60; i++)
-        //         Row(children: [for (int j = 1; j <= 20; j++) const SizedBox.square(dimension: 64, child: Clock())]),
-        //     ],
-        //   ),
-        // ),
-        child: Center(child: Clock()),
+        // Example of a clock with a fixed size.
+        child: Center(child: ClockWidget()),
       ),
     ),
   );
 }
 
-class Clock extends StatelessWidget {
-  const Clock({super.key});
-
-  @override
-  Widget build(BuildContext context) =>
-      const Center(child: Padding(padding: EdgeInsets.all(8), child: SizedBox.expand(child: ClockWidget())));
-}
-
 class ClockWidget extends LeafRenderObjectWidget {
-  const ClockWidget({super.key});
+  const ClockWidget({this.dimension = double.infinity, super.key});
+
+  /// The desired size (width and height) of the clock.
+  ///
+  /// If set to [double.infinity], the clock will expand to fill the available space.
+  final double dimension;
 
   @override
-  RenderObject createRenderObject(BuildContext context) => ClockRenderBox();
+  RenderObject createRenderObject(BuildContext context) => ClockRenderBox(dimension: dimension);
 
   @override
-  void updateRenderObject(BuildContext context, covariant ClockRenderBox renderObject) {}
+  void updateRenderObject(BuildContext context, covariant ClockRenderBox renderObject) {
+    renderObject.dimension = dimension;
+  }
 }
 
+/// A custom [RenderBox] that lays out and paints an analog clock.
+///
+/// This class manages the animation loop via a [Ticker] and delegates the
+/// actual drawing to specialized painter classes for different parts of the clock
+/// (dial, hands, and center). This separation of concerns and caching of static
+/// parts (`Picture`) ensures high performance.
 class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
-  ClockRenderBox() : _dialPainter = _DialPainter(), _centerPainter = _CenterPainter() {
-    _arrowsPainter = _ArrowsPainter(() => _currentTime);
+  /// Creates a [ClockRenderBox].
+  ///
+  /// Initializes the painters responsible for drawing different parts of the clock.
+  ClockRenderBox({required double dimension})
+    : _dimension = dimension,
+      _dialPainter = _DialPainter(),
+      _arrowsPainter = _ArrowsPainter(),
+      _centerPainter = _CenterPainter();
+
+  double _dimension;
+  double get dimension => _dimension;
+  set dimension(double value) {
+    if (_dimension == value) {
+      return;
+    }
+    _dimension = value;
+    markNeedsLayout();
   }
 
+  /// Painter for the static clock face (dial and ticks).
   final _DialPainter _dialPainter;
-  late final _ArrowsPainter _arrowsPainter;
+
+  /// Painter for the dynamic clock hands.
+  final _ArrowsPainter _arrowsPainter;
+
+  /// Painter for the central circle, drawn on top of the hands.
   final _CenterPainter _centerPainter;
 
-  /// Vsync loop ticker
+  /// A [Ticker] that drives the clock's animation, firing on every frame.
   Ticker? _ticker;
+
+  /// The current time, updated once per second to trigger repaints.
   DateTime _currentTime = DateTime.now();
 
+  /// Called by the ticker on each frame.
+  ///
+  /// It checks if the current second has changed. If so, it updates [_currentTime]
+  /// and marks the render box as needing to be repainted. This is an optimization
+  /// to avoid repainting on every single frame, only when the second hand needs to move.
   void _onTick(Duration elapsed) {
     final now = DateTime.now();
     if (now.second != _currentTime.second) {
       _currentTime = now;
-      markNeedsPaint();
+      markNeedsPaint(); // Request a repaint.
     }
   }
 
@@ -85,19 +110,19 @@ class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
   void attach(PipelineOwner owner) {
     super.attach(owner);
     WidgetsBinding.instance.addObserver(this);
+    // Create and start the ticker when the render box is attached to the tree.
     _ticker ??= Ticker(_onTick, debugLabel: 'ClockRenderBox')..start();
   }
 
   @override
   Size computeDryLayout(covariant BoxConstraints constraints) {
-    /// Use the biggest size that fits within the constraints
-    final size = constraints.biggest;
-
-    _preparePainters(size);
-
-    return size;
+    if (dimension.isFinite) {
+      return constraints.constrain(Size.square(dimension));
+    }
+    return constraints.biggest;
   }
 
+  // Prepare painters with the new size. This pre-calculates layouts and caches static drawings.
   void _preparePainters(Size size) {
     _dialPainter.prepare(size);
     _arrowsPainter.prepare(size);
@@ -106,13 +131,10 @@ class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
 
   @override
   void performLayout() {
-    size = constraints.biggest;
-    _preparePainters(size);
-  }
-
-  @override
-  void performResize() {
+    // Set the size of the render box to the biggest available space or the specified dimension.
     size = computeDryLayout(constraints);
+    // Prepare the painters with the final size.
+    _preparePainters(size);
   }
 
   @override
@@ -130,16 +152,17 @@ class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
           ..translate(offset.dx, offset.dy)
           ..clipRect(Rect.fromLTWH(0, 0, size.width, size.height));
 
-    _dialPainter.paint(canvas, size);
-    _arrowsPainter.paint(canvas, size);
-    _centerPainter.paint(canvas, size);
+    // Paint the clock parts in the correct order (layers).
+    _dialPainter.paint(canvas);
+    _arrowsPainter.paint(canvas, size, _currentTime);
+    _centerPainter.paint(canvas);
 
     canvas.restore();
   }
 }
 
-/// Base class for painters that draw a part of the clock.
-abstract class _ClockPartPainter {
+/// A mixin that provides shared properties and methods for clock part painters.
+mixin _ClockPartPainterMixin {
   /// Colors used in the clock.
   final pinkColor = const Color(0xffff5876);
   final grayColor = const Color(0xff405b6c);
@@ -156,9 +179,6 @@ abstract class _ClockPartPainter {
   void prepare(Size size) {
     _clockRadius = size.shortestSide / 2;
   }
-
-  /// Paints the content on the canvas.
-  void paint(Canvas canvas, Size size);
 
   /// Draws an inner shadow for a circular shape on the canvas.
   @protected
@@ -181,7 +201,7 @@ abstract class _ClockPartPainter {
 
 /// A painter responsible for drawing the clock's dial.
 /// The dial is static and only changes when the size changes, so we cache it as a [Picture] for performance.
-class _DialPainter extends _ClockPartPainter {
+class _DialPainter with _ClockPartPainterMixin {
   /// A cached Picture of the dial to optimize performance.
   Picture? _dialPicture;
 
@@ -227,8 +247,8 @@ class _DialPainter extends _ClockPartPainter {
     _dialPicture = recorder.endRecording();
   }
 
-  @override
-  void paint(Canvas canvas, Size size) {
+  /// Paints the cached dial picture onto the canvas.
+  void paint(Canvas canvas) {
     if (_dialPicture case Picture picture) {
       canvas.drawPicture(picture);
     }
@@ -236,7 +256,7 @@ class _DialPainter extends _ClockPartPainter {
 }
 
 /// A painter for the central circle, drawn on top of the hands.
-class _CenterPainter extends _ClockPartPainter {
+class _CenterPainter with _ClockPartPainterMixin {
   Picture? _centerPicture;
 
   @override
@@ -252,8 +272,8 @@ class _CenterPainter extends _ClockPartPainter {
     _centerPicture = recorder.endRecording();
   }
 
-  @override
-  void paint(Canvas canvas, Size size) {
+  /// Paints the cached center circle picture onto the canvas.
+  void paint(Canvas canvas) {
     if (_centerPicture case Picture picture) {
       canvas.drawPicture(picture);
     }
@@ -264,13 +284,8 @@ class _CenterPainter extends _ClockPartPainter {
 ///
 /// This painter handles the dynamic elements of the clock that change over time.
 /// It pre-calculates size-dependent properties in `prepare` to optimize the `paint` method.
-class _ArrowsPainter extends _ClockPartPainter {
-  _ArrowsPainter(DateTime Function() timeProvider) : _timeProvider = timeProvider;
-
-  /// Provides a time for drawing the hands.
-  final DateTime Function() _timeProvider;
-
-  /// Paint for the hour hand.
+class _ArrowsPainter with _ClockPartPainterMixin {
+  _ArrowsPainter();
   late Paint _hourArrowPaint;
 
   /// Paint for the minute hand.
@@ -319,13 +334,12 @@ class _ArrowsPainter extends _ClockPartPainter {
   }
 
   /// Paints the clock hands on the canvas for a given date.
-  @override
-  void paint(Canvas canvas, Size size) {
+  void paint(Canvas canvas, Size size, DateTime time) {
     canvas
       ..save()
       ..translate(size.width / 2, size.height / 2);
 
-    final date = _timeProvider();
+    final date = time;
 
     final hour = date.hour;
     final minute = date.minute;
