@@ -27,7 +27,7 @@ class App extends StatefulWidget {
 
 class _AppState extends State<App> {
   // Use a value from 0.0 to 1.0 for the slider position.
-  double _sliderPosition = 0.2;
+  double _sliderPosition = 0;
 
   /// The minimum dimension of the clock widget.
   static const double _minDimension = 32;
@@ -43,8 +43,8 @@ class _AppState extends State<App> {
   @override
   void initState() {
     super.initState();
-    // Set the initial slider position based on the initial dimension of 45.0.
-    const initialDimension = 45.0;
+    // Set the initial slider position based on the initial dimension of 64.0.
+    const initialDimension = 64.0;
     _sliderPosition =
         math.pow((initialDimension - _minDimension) / (_maxDimension - _minDimension), 1.0 / _exponent).toDouble();
   }
@@ -59,6 +59,7 @@ class _AppState extends State<App> {
         child: Column(
           children: [
             Expanded(child: Mosaic(dimension: _dimension)),
+
             Padding(
               padding: const EdgeInsets.all(20),
               child: Slider(
@@ -92,7 +93,7 @@ class Mosaic extends StatelessWidget {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      if (dimension <= 0) return const SizedBox.shrink();
+      assert(dimension > 0, 'Dimension must be greater than 0');
 
       final crossAxisCount = (constraints.maxWidth / dimension).floor();
       final mainAxisCount = (constraints.maxHeight / dimension).floor();
@@ -100,12 +101,18 @@ class Mosaic extends StatelessWidget {
 
       if (totalChildren == 0) return const ClockWidget();
 
+      final spacing = math.min(128 / mainAxisCount, 128 / crossAxisCount);
+
       return GridView.builder(
-        physics: const NeverScrollableScrollPhysics(),
         itemCount: totalChildren,
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: crossAxisCount, childAspectRatio: 1),
-        itemBuilder:
-            (context, index) => Padding(padding: const EdgeInsets.all(4), child: ClockWidget(dimension: dimension)),
+        padding: EdgeInsets.all(spacing),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          mainAxisSpacing: spacing,
+          crossAxisSpacing: spacing,
+          crossAxisCount: crossAxisCount,
+          childAspectRatio: 1,
+        ),
+        itemBuilder: (context, index) => ClockWidget(dimension: dimension),
       );
     },
   );
@@ -154,7 +161,7 @@ class ClockRenderBox extends RenderBox {
   ClockRenderBox({required double dimension, required Duration animationDuration, DateTime? initTime})
     : _dimension = dimension,
       _dialPainter = _DialPainter(),
-      _arrowsPainter = _ArrowsPainter(),
+      _handsPainter = _HandsPainter(),
       _centerPainter = _CenterPainter() {
     _animator = _ClockAnimator(
       onUpdate: markNeedsPaint,
@@ -177,7 +184,7 @@ class ClockRenderBox extends RenderBox {
   final _DialPainter _dialPainter;
 
   /// Painter for the dynamic clock hands.
-  final _ArrowsPainter _arrowsPainter;
+  final _HandsPainter _handsPainter;
 
   /// Painter for the central circle, drawn on top of the hands.
   final _CenterPainter _centerPainter;
@@ -186,11 +193,52 @@ class ClockRenderBox extends RenderBox {
   late final _ClockAnimator _animator;
 
   @override
-  Size computeDryLayout(covariant BoxConstraints constraints) {
-    if (dimension.isFinite) {
-      return constraints.constrain(Size.square(dimension));
+  double computeMinIntrinsicWidth(double height) {
+    if (_dimension.isFinite) {
+      return _dimension;
     }
-    return constraints.biggest;
+    // If dimension is infinite, our width is determined by the height constraint.
+    return height.isFinite ? height : 0.0;
+  }
+
+  @override
+  double computeMaxIntrinsicWidth(double height) {
+    if (_dimension.isFinite) {
+      return _dimension;
+    }
+    // If dimension is infinite, our width is determined by the height constraint.
+    return height.isFinite ? height : double.infinity;
+  }
+
+  @override
+  double computeMinIntrinsicHeight(double width) {
+    if (_dimension.isFinite) {
+      return _dimension;
+    }
+    return width.isFinite ? width : 0.0;
+  }
+
+  @override
+  double computeMaxIntrinsicHeight(double width) {
+    if (_dimension.isFinite) {
+      return _dimension;
+    }
+    return width.isFinite ? width : double.infinity;
+  }
+
+  @override
+  Size computeDryLayout(covariant BoxConstraints constraints) {
+    if (_dimension.isFinite) {
+      return constraints.constrain(Size.square(_dimension));
+    }
+    // When dimension is infinite, expand to fit the constraints, but as a square.
+    final side = constraints.biggest.shortestSide;
+    if (side.isInfinite) {
+      // If both width and height are unbounded, we can't size ourselves.
+      // Fall back to the smallest possible size.
+      return constraints.smallest;
+    }
+    return constraints.constrain(Size.square(side));
   }
 
   @override
@@ -200,7 +248,7 @@ class ClockRenderBox extends RenderBox {
 
     // Prepare painters with the new size. This pre-calculates layouts and caches static drawings.
     _dialPainter.prepare(size);
-    _arrowsPainter.prepare(size);
+    _handsPainter.prepare(size);
     _centerPainter.prepare(size);
   }
 
@@ -222,7 +270,7 @@ class ClockRenderBox extends RenderBox {
     _dialPainter.paint(canvas);
 
     final angles = _animator.currentAngles;
-    _arrowsPainter.paint(canvas, size, hourAngle: angles.hour, minuteAngle: angles.minute, secondAngle: angles.second);
+    _handsPainter.paint(canvas, size, hourAngle: angles.hour, minuteAngle: angles.minute, secondAngle: angles.second);
 
     // Paint the center circle on top of the hands.
     _centerPainter.paint(canvas);
@@ -251,7 +299,7 @@ class ClockRenderBox extends RenderBox {
 ///
 /// This helps to centralize common drawing logic and constants, such as colors
 /// and radius calculations.
-mixin _ClockPartPainterMixin {
+mixin _ClockPainterMixin {
   /// Colors used in the clock.
   static const pinkColor = Color(0xffff5876);
   static const grayColor = Color(0xFF405B6C);
@@ -291,7 +339,7 @@ mixin _ClockPartPainterMixin {
 
 /// A painter responsible for drawing the clock's dial.
 /// The dial is static and only changes when the size changes, so we cache it as a [Picture] for performance.
-class _DialPainter with _ClockPartPainterMixin {
+class _DialPainter with _ClockPainterMixin {
   /// A cached Picture of the dial to optimize performance.
   Picture? _dialPicture;
 
@@ -308,14 +356,14 @@ class _DialPainter with _ClockPartPainterMixin {
 
     final tickPaint =
         Paint()
-          ..color = _ClockPartPainterMixin.grayColor
+          ..color = _ClockPainterMixin.grayColor
           ..strokeWidth = clockRadius * 0.062
           ..strokeCap = StrokeCap.round;
 
     /// Records the main dial face (background circles and shadows).
     canvas
-      ..drawCircle(Offset.zero, clockRadius, Paint()..color = _ClockPartPainterMixin.pinkColor)
-      ..drawCircle(Offset.zero, innerRadius, Paint()..color = _ClockPartPainterMixin.lightGrayColor);
+      ..drawCircle(Offset.zero, clockRadius, Paint()..color = _ClockPainterMixin.pinkColor)
+      ..drawCircle(Offset.zero, innerRadius, Paint()..color = _ClockPainterMixin.lightGrayColor);
 
     drawInnerShadow(canvas, clockRadius, clockRadius * 0.08);
     drawInnerShadow(canvas, innerRadius, innerRadius * 0.08);
@@ -346,7 +394,7 @@ class _DialPainter with _ClockPartPainterMixin {
 }
 
 /// A painter for the central circle, drawn on top of the hands.
-class _CenterPainter with _ClockPartPainterMixin {
+class _CenterPainter with _ClockPainterMixin {
   Picture? _centerPicture;
 
   @override
@@ -357,7 +405,7 @@ class _CenterPainter with _ClockPartPainterMixin {
     final canvas = Canvas(recorder)..translate(size.width / 2, size.height / 2);
 
     final centerRadius = clockRadius * 0.11;
-    canvas.drawCircle(Offset.zero, centerRadius, Paint()..color = _ClockPartPainterMixin.pinkColor);
+    canvas.drawCircle(Offset.zero, centerRadius, Paint()..color = _ClockPainterMixin.pinkColor);
     drawInnerShadow(canvas, centerRadius, centerRadius * 0.75);
     _centerPicture = recorder.endRecording();
   }
@@ -374,23 +422,23 @@ class _CenterPainter with _ClockPartPainterMixin {
 ///
 /// This painter handles the dynamic elements of the clock that change over time.
 /// It pre-calculates size-dependent properties in `prepare` to optimize the `paint` method.
-class _ArrowsPainter with _ClockPartPainterMixin {
-  late Paint _hourArrowPaint;
+class _HandsPainter with _ClockPainterMixin {
+  late Paint _hourHandPaint;
 
   /// Paint for the minute hand.
-  late Paint _minuteArrowPaint;
+  late Paint _minuteHandPaint;
 
   /// Paint for the second hand.
-  late Paint _secondArrowPaint;
+  late Paint _secondHandPaint;
 
   /// Length of the hour hand.
-  double _hourArrowLength = 0;
+  double _hourHandLength = 0;
 
   /// Length of the minute hand.
-  double _minuteArrowLength = 0;
+  double _minuteHandLength = 0;
 
   /// Length of the second hand.
-  double _secondArrowLength = 0;
+  double _secondHandLength = 0;
 
   /// Pre-calculates size-dependent properties like hand lengths and paint styles.
   /// This is called whenever the clock's size changes to avoid expensive calculations
@@ -399,25 +447,25 @@ class _ArrowsPainter with _ClockPartPainterMixin {
   void prepare(Size size) {
     super.prepare(size);
 
-    _hourArrowLength = clockRadius * 0.36;
-    _minuteArrowLength = clockRadius * 0.54;
-    _secondArrowLength = clockRadius * 0.58;
+    _hourHandLength = clockRadius * 0.36;
+    _minuteHandLength = clockRadius * 0.54;
+    _secondHandLength = clockRadius * 0.58;
 
-    _hourArrowPaint =
+    _hourHandPaint =
         Paint()
-          ..color = _ClockPartPainterMixin.grayColor
+          ..color = _ClockPainterMixin.grayColor
           ..strokeWidth = clockRadius * 0.12
           ..strokeCap = StrokeCap.round;
 
-    _minuteArrowPaint =
+    _minuteHandPaint =
         Paint()
-          ..color = _ClockPartPainterMixin.grayColor
+          ..color = _ClockPainterMixin.grayColor
           ..strokeWidth = clockRadius * 0.12
           ..strokeCap = StrokeCap.round;
 
-    _secondArrowPaint =
+    _secondHandPaint =
         Paint()
-          ..color = _ClockPartPainterMixin.blueColor
+          ..color = _ClockPainterMixin.blueColor
           ..strokeWidth = clockRadius * 0.06
           ..strokeCap = StrokeCap.round;
   }
@@ -433,23 +481,23 @@ class _ArrowsPainter with _ClockPartPainterMixin {
     canvas
       ..save()
       ..translate(size.width / 2, size.height / 2)
-      // Draw the hour hand.
+      // hour hand.
       ..drawLine(
         Offset.zero,
-        Offset(_hourArrowLength * math.cos(hourAngle), _hourArrowLength * math.sin(hourAngle)),
-        _hourArrowPaint,
+        Offset(_hourHandLength * math.cos(hourAngle), _hourHandLength * math.sin(hourAngle)),
+        _hourHandPaint,
       )
-      // Draw the minute hand.
+      // minute hand.
       ..drawLine(
         Offset.zero,
-        Offset(_minuteArrowLength * math.cos(minuteAngle), _minuteArrowLength * math.sin(minuteAngle)),
-        _minuteArrowPaint,
+        Offset(_minuteHandLength * math.cos(minuteAngle), _minuteHandLength * math.sin(minuteAngle)),
+        _minuteHandPaint,
       )
-      // Draw the second hand.
+      // second hand.
       ..drawLine(
         Offset.zero,
-        Offset(_secondArrowLength * math.cos(secondAngle), _secondArrowLength * math.sin(secondAngle)),
-        _secondArrowPaint,
+        Offset(_secondHandLength * math.cos(secondAngle), _secondHandLength * math.sin(secondAngle)),
+        _secondHandPaint,
       )
       ..restore();
   }
