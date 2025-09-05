@@ -598,9 +598,19 @@ class _ClockAnimator {
     _animationStartTime = DateTime.now();
     final targetTime = _animationStartTime.add(animationDuration);
 
+    // 1. Get the initial angles of the hands.
+    //    These are the angles corresponding to the time the clock showed before
+    //    the animation started (_initTime). They serve as the starting point for the animation.
     final startAngles = _getAnglesFromTime(_clockTime);
+
+    // 2. Calculate the target angles.
+    //    These are the angles the hands should be at by the end of the animation.
+    //    They correspond to `targetTime`, which is the current time plus the animation duration.
     final targetAngles = _getAnglesFromTime(targetTime);
 
+    // 3. Create tweens for each hand for a smooth transition from the start to the target angle.
+    //    The `_createAngleTween` method is important as it ensures the hands always move
+    //    clockwise, even if it's the "long way around" (e.g., from 11 to 1).
     _hourTween = _createAngleTween(startAngles.hour, targetAngles.hour);
     _minuteTween = _createAngleTween(startAngles.minute, targetAngles.minute);
     _secondTween = _createAngleTween(startAngles.second, targetAngles.second);
