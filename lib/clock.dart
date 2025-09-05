@@ -17,22 +17,97 @@ void main() => runZonedGuarded<void>(
 /// {@template app}
 /// App widget.
 /// {@endtemplate}
-class App extends StatelessWidget {
+class App extends StatefulWidget {
   /// {@macro app}
   const App({super.key});
+
+  @override
+  State<App> createState() => _AppState();
+}
+
+class _AppState extends State<App> {
+  // Use a value from 0.0 to 1.0 for the slider position.
+  double _sliderPosition = 0.2;
+
+  /// The minimum dimension of the clock widget.
+  static const double _minDimension = 32;
+
+  /// The maximum dimension of the clock widget.
+  static const double _maxDimension = 960;
+  // An exponent > 1 makes the steps smaller at the beginning.
+  static const double _exponent = 2;
+
+  // Calculate the real dimension from the linear slider position.
+  double get _dimension => _minDimension + math.pow(_sliderPosition, _exponent) * (_maxDimension - _minDimension);
+
+  @override
+  void initState() {
+    super.initState();
+    // Set the initial slider position based on the initial dimension of 45.0.
+    const initialDimension = 45.0;
+    _sliderPosition =
+        math.pow((initialDimension - _minDimension) / (_maxDimension - _minDimension), 1.0 / _exponent).toDouble();
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'Material App',
     debugShowCheckedModeBanner: false,
     home: Scaffold(
-      appBar: AppBar(title: const Text('Material App Bar')),
-
-      body: const SafeArea(
-        // Example of a clock with a fixed size.
-        child: Center(child: ClockWidget()),
+      appBar: AppBar(title: const Text('Clock Mosaic Settings')),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(child: Mosaic(dimension: _dimension)),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Slider(
+                value: _sliderPosition, // The slider now controls the position from 0.0 to 1.0
+                min: 0,
+                max: 1,
+                divisions: 20, // Use 20 divisions for smoothness
+                label: _dimension.round().toString(),
+                onChanged: (value) => setState(() => _sliderPosition = value),
+              ),
+            ),
+          ],
+        ),
       ),
     ),
+  );
+}
+
+/// A widget that fills the available space with a grid of child widgets.
+///
+/// This widget uses a [LayoutBuilder] to determine the available space
+/// and a [GridView.builder] to efficiently create a grid of independent
+/// child widgets, each with its own state.
+class Mosaic extends StatelessWidget {
+  /// Creates a mosaic widget.
+  const Mosaic({required this.dimension, super.key});
+
+  /// The fixed dimension of each child widget in the mosaic.
+  final double dimension;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      if (dimension <= 0) return const SizedBox.shrink();
+
+      final crossAxisCount = (constraints.maxWidth / dimension).floor();
+      final mainAxisCount = (constraints.maxHeight / dimension).floor();
+      final totalChildren = crossAxisCount * mainAxisCount;
+
+      if (totalChildren == 0) return const ClockWidget();
+
+      return GridView.builder(
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: totalChildren,
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: crossAxisCount, childAspectRatio: 1),
+        itemBuilder:
+            (context, index) => Padding(padding: const EdgeInsets.all(4), child: ClockWidget(dimension: dimension)),
+      );
+    },
   );
 }
 
@@ -199,7 +274,7 @@ mixin _ClockPartPainterMixin {
   @protected
   void drawInnerShadow(Canvas canvas, double radius, double shadowSize) {
     // Don't draw the shadow if the clock is too small for performance and visual clarity.
-    if (clockRadius < 128) return;
+    // if (clockRadius < 32) return;
 
     final shadowPaint = Paint()..color = Colors.black12;
 
