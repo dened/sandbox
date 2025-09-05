@@ -10,6 +10,7 @@ import 'package:flutter/scheduler.dart';
 /// Runs the [App] widget and handles top-level errors.
 void main() => runZonedGuarded<void>(
   () => runApp(const App()),
+  // ignore: avoid_print
   (error, stackTrace) => print('Top level exception: $error\n$stackTrace'),
 );
 
@@ -35,20 +36,33 @@ class App extends StatelessWidget {
   );
 }
 
+/// {@template clock_widget}
+/// A widget that displays a custom-rendered analog clock.
+///
+/// This widget uses a [LeafRenderObjectWidget] to create a [ClockRenderBox]
+/// for efficient custom painting and animation.
+/// {@endtemplate}
+@immutable
 class ClockWidget extends LeafRenderObjectWidget {
-  const ClockWidget({this.dimension = double.infinity, super.key});
+  /// {@macro clock_widget}
+  const ClockWidget({this.dimension = double.infinity, this.animationDuration = const Duration(seconds: 2), super.key});
 
   /// The desired size (width and height) of the clock.
   ///
   /// If set to [double.infinity], the clock will expand to fill the available space.
   final double dimension;
 
+  /// Duration for the initial catching up animation.
+  final Duration animationDuration;
+
   @override
-  RenderObject createRenderObject(BuildContext context) => ClockRenderBox(dimension: dimension);
+  RenderObject createRenderObject(BuildContext context) =>
+      ClockRenderBox(dimension: dimension, animationDuration: animationDuration);
 
   @override
   void updateRenderObject(BuildContext context, covariant ClockRenderBox renderObject) {
     renderObject.dimension = dimension;
+    renderObject._animator.animationDuration = animationDuration;
   }
 }
 
@@ -58,15 +72,21 @@ class ClockWidget extends LeafRenderObjectWidget {
 /// actual drawing to specialized painter classes for different parts of the clock
 /// (dial, hands, and center). This separation of concerns and caching of static
 /// parts (`Picture`) ensures high performance.
-class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
+class ClockRenderBox extends RenderBox {
   /// Creates a [ClockRenderBox].
   ///
   /// Initializes the painters responsible for drawing different parts of the clock.
-  ClockRenderBox({required double dimension})
+  ClockRenderBox({required double dimension, required Duration animationDuration, DateTime? initTime})
     : _dimension = dimension,
       _dialPainter = _DialPainter(),
       _arrowsPainter = _ArrowsPainter(),
-      _centerPainter = _CenterPainter();
+      _centerPainter = _CenterPainter() {
+    _animator = _ClockAnimator(
+      onUpdate: markNeedsPaint,
+      initTime: initTime ?? DateTime(2025, 1, 1, 12, 22, 35),
+      animationDuration: animationDuration,
+    );
+  }
 
   double _dimension;
   double get dimension => _dimension;
@@ -87,32 +107,8 @@ class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
   /// Painter for the central circle, drawn on top of the hands.
   final _CenterPainter _centerPainter;
 
-  /// A [Ticker] that drives the clock's animation, firing on every frame.
-  Ticker? _ticker;
-
-  /// The current time, updated once per second to trigger repaints.
-  DateTime _currentTime = DateTime.now();
-
-  /// Called by the ticker on each frame.
-  ///
-  /// It checks if the current second has changed. If so, it updates [_currentTime]
-  /// and marks the render box as needing to be repainted. This is an optimization
-  /// to avoid repainting on every single frame, only when the second hand needs to move.
-  void _onTick(Duration elapsed) {
-    final now = DateTime.now();
-    if (now.second != _currentTime.second) {
-      _currentTime = now;
-      markNeedsPaint(); // Request a repaint.
-    }
-  }
-
-  @override
-  void attach(PipelineOwner owner) {
-    super.attach(owner);
-    WidgetsBinding.instance.addObserver(this);
-    // Create and start the ticker when the render box is attached to the tree.
-    _ticker ??= Ticker(_onTick, debugLabel: 'ClockRenderBox')..start();
-  }
+  /// The animator responsible for managing the clock's state and animation.
+  late final _ClockAnimator _animator;
 
   @override
   Size computeDryLayout(covariant BoxConstraints constraints) {
@@ -122,26 +118,21 @@ class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
     return constraints.biggest;
   }
 
-  // Prepare painters with the new size. This pre-calculates layouts and caches static drawings.
-  void _preparePainters(Size size) {
+  @override
+  void performLayout() {
+    // Set the size of the render box to the biggest available space or the specified dimension.
+    size = computeDryLayout(constraints);
+
+    // Prepare painters with the new size. This pre-calculates layouts and caches static drawings.
     _dialPainter.prepare(size);
     _arrowsPainter.prepare(size);
     _centerPainter.prepare(size);
   }
 
   @override
-  void performLayout() {
-    // Set the size of the render box to the biggest available space or the specified dimension.
-    size = computeDryLayout(constraints);
-    // Prepare the painters with the final size.
-    _preparePainters(size);
-  }
-
-  @override
   void detach() {
     super.detach();
-    WidgetsBinding.instance.removeObserver(this);
-    _ticker?.dispose();
+    _animator.dispose();
   }
 
   @override
@@ -154,19 +145,43 @@ class ClockRenderBox extends RenderBox with WidgetsBindingObserver {
 
     // Paint the clock parts in the correct order (layers).
     _dialPainter.paint(canvas);
-    _arrowsPainter.paint(canvas, size, _currentTime);
+
+    final angles = _animator.currentAngles;
+    _arrowsPainter.paint(canvas, size, hourAngle: angles.hour, minuteAngle: angles.minute, secondAngle: angles.second);
+
+    // Paint the center circle on top of the hands.
     _centerPainter.paint(canvas);
 
     canvas.restore();
   }
+
+  @override
+  bool hitTestSelf(Offset position) => true;
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) => false;
+
+  @override
+  void handleEvent(PointerEvent event, covariant BoxHitTestEntry entry) {
+    if (event is! PointerDownEvent) return;
+    if (_animator.state != _ClockState.idle) {
+      _animator.stop();
+    } else {
+      _animator.start();
+    }
+  }
 }
 
 /// A mixin that provides shared properties and methods for clock part painters.
+///
+/// This helps to centralize common drawing logic and constants, such as colors
+/// and radius calculations.
 mixin _ClockPartPainterMixin {
   /// Colors used in the clock.
-  final pinkColor = const Color(0xffff5876);
-  final grayColor = const Color(0xff405b6c);
-  final blueColor = const Color(0xff86dcff);
+  static const pinkColor = Color(0xffff5876);
+  static const grayColor = Color(0xFF405B6C);
+  static const blueColor = Color(0xff86dcff);
+  static const lightGrayColor = Color(0xffe4eef9);
 
   double _clockRadius = 0;
 
@@ -214,24 +229,24 @@ class _DialPainter with _ClockPartPainterMixin {
 
     final innerRadius = clockRadius * 0.835;
 
-    final hourTickLength = clockRadius * .093;
+    final hourTickLength = clockRadius * 0.093;
 
     final tickPaint =
         Paint()
-          ..color = grayColor
-          ..strokeWidth = clockRadius * .062
+          ..color = _ClockPartPainterMixin.grayColor
+          ..strokeWidth = clockRadius * 0.062
           ..strokeCap = StrokeCap.round;
 
     /// Records the main dial face (background circles and shadows).
     canvas
-      ..drawCircle(Offset.zero, clockRadius, Paint()..color = pinkColor)
-      ..drawCircle(Offset.zero, innerRadius, Paint()..color = const Color(0xffe4eef9));
+      ..drawCircle(Offset.zero, clockRadius, Paint()..color = _ClockPartPainterMixin.pinkColor)
+      ..drawCircle(Offset.zero, innerRadius, Paint()..color = _ClockPartPainterMixin.lightGrayColor);
 
     drawInnerShadow(canvas, clockRadius, clockRadius * 0.08);
     drawInnerShadow(canvas, innerRadius, innerRadius * 0.08);
 
     /// Records the hour ticks.
-    final tickRadius = clockRadius * .73;
+    final tickRadius = clockRadius * 0.73;
     for (var h = 0; h < 12; h += 3) {
       final angle = -math.pi / 2 + h * math.pi / 6;
 
@@ -267,7 +282,7 @@ class _CenterPainter with _ClockPartPainterMixin {
     final canvas = Canvas(recorder)..translate(size.width / 2, size.height / 2);
 
     final centerRadius = clockRadius * 0.11;
-    canvas.drawCircle(Offset.zero, centerRadius, Paint()..color = pinkColor);
+    canvas.drawCircle(Offset.zero, centerRadius, Paint()..color = _ClockPartPainterMixin.pinkColor);
     drawInnerShadow(canvas, centerRadius, centerRadius * 0.75);
     _centerPicture = recorder.endRecording();
   }
@@ -285,7 +300,6 @@ class _CenterPainter with _ClockPartPainterMixin {
 /// This painter handles the dynamic elements of the clock that change over time.
 /// It pre-calculates size-dependent properties in `prepare` to optimize the `paint` method.
 class _ArrowsPainter with _ClockPartPainterMixin {
-  _ArrowsPainter();
   late Paint _hourArrowPaint;
 
   /// Paint for the minute hand.
@@ -316,45 +330,35 @@ class _ArrowsPainter with _ClockPartPainterMixin {
 
     _hourArrowPaint =
         Paint()
-          ..color = grayColor
-          ..strokeWidth = clockRadius * .12
+          ..color = _ClockPartPainterMixin.grayColor
+          ..strokeWidth = clockRadius * 0.12
           ..strokeCap = StrokeCap.round;
 
     _minuteArrowPaint =
         Paint()
-          ..color = const Color.fromARGB(255, 81, 115, 136)
-          ..strokeWidth = clockRadius * .12
+          ..color = _ClockPartPainterMixin.grayColor
+          ..strokeWidth = clockRadius * 0.12
           ..strokeCap = StrokeCap.round;
 
     _secondArrowPaint =
         Paint()
-          ..color = blueColor
-          ..strokeWidth = clockRadius * .06
+          ..color = _ClockPartPainterMixin.blueColor
+          ..strokeWidth = clockRadius * 0.06
           ..strokeCap = StrokeCap.round;
   }
 
   /// Paints the clock hands on the canvas for a given date.
-  void paint(Canvas canvas, Size size, DateTime time) {
+  void paint(
+    Canvas canvas,
+    Size size, {
+    required double hourAngle,
+    required double minuteAngle,
+    required double secondAngle,
+  }) {
     canvas
       ..save()
-      ..translate(size.width / 2, size.height / 2);
-
-    final date = time;
-
-    final hour = date.hour;
-    final minute = date.minute;
-    final second = date.second;
-
-    // Calculate the angle for each hand.
-    // The starting point is -pi/2 radians (12 o'clock).
-    // An hour step is pi/6 radians (30 degrees).
-    final hourAngle = -math.pi / 2 + (hour % 12 + minute / 60) * math.pi / 6;
-    // A minute/second step is pi/30 radians (6 degrees).
-    final minuteAngle = -math.pi / 2 + (minute + second / 60) * math.pi / 30;
-    final secondAngle = -math.pi / 2 + second * math.pi / 30;
-
-    // Draw the hour hand.
-    canvas
+      ..translate(size.width / 2, size.height / 2)
+      // Draw the hour hand.
       ..drawLine(
         Offset.zero,
         Offset(_hourArrowLength * math.cos(hourAngle), _hourArrowLength * math.sin(hourAngle)),
@@ -373,5 +377,155 @@ class _ArrowsPainter with _ClockPartPainterMixin {
         _secondArrowPaint,
       )
       ..restore();
+  }
+}
+
+/// The animation state of the clock.
+enum _ClockState {
+  /// The clock is stopped and showing the initial time.
+  idle,
+
+  /// The clock is animating to catch up to the current time.
+  catchingUp,
+
+  /// The clock is running and synchronized with the current time.
+  running,
+}
+
+/// A helper class to manage the animation state and logic for the clock.
+///
+/// This class encapsulates the ticker, animation states (idle, catching up, running),
+/// and the calculation of hand angles, separating the animation logic from the
+/// rendering logic in [ClockRenderBox].
+class _ClockAnimator {
+  _ClockAnimator({required this.onUpdate, required DateTime initTime, required this.animationDuration})
+    : _initTime = initTime,
+      _clockTime = initTime;
+
+  /// A callback to be invoked when the animator's state changes and a repaint is needed.
+  final VoidCallback onUpdate;
+
+  /// The initial time for the clock, used for resetting.
+  final DateTime _initTime;
+
+  /// The current time displayed by the clock.
+  late DateTime _clockTime;
+
+  /// The ticker that drives the animation.
+  Ticker? _ticker;
+
+  /// The current state of the clock's animation.
+  _ClockState _state = _ClockState.idle;
+  _ClockState get state => _state;
+
+  // Animation state for the initial "catching up" animation.
+  DateTime _animationStartTime = DateTime.now();
+
+  /// Duration for the initial catching up animation.
+  Duration animationDuration;
+
+  double _progress = 0;
+
+  // Start, target, and current angles for the hands animation.
+  Animatable<double>? _hourTween, _minuteTween, _secondTween;
+
+  /// Returns the current angles of the clock hands.
+  ({double hour, double minute, double second}) get currentAngles => switch (_state) {
+    _ClockState.running => _getAnglesFromTime(_clockTime),
+    _ClockState.catchingUp => (
+      hour: _hourTween!.transform(_progress),
+      minute: _minuteTween!.transform(_progress),
+      second: _secondTween!.transform(_progress),
+    ),
+    _ClockState.idle => _getAnglesFromTime(_initTime),
+  };
+
+  /// Calculates the angles for each hand based on a given [DateTime].
+  ({double hour, double minute, double second}) _getAnglesFromTime(DateTime time) {
+    final hour = time.hour;
+    final minute = time.minute;
+    final second = time.second + time.millisecond / 1000.0;
+
+    // Calculate the angle for each hand.
+    // The starting point is -pi/2 radians (12 o'clock).
+    final hourAngle = -math.pi / 2 + (hour % 12 + minute / 60 + second / 3600) * math.pi / 6;
+    // A minute/second step is pi/30 radians (6 degrees).
+    final minuteAngle = -math.pi / 2 + (minute + second / 60) * math.pi / 30;
+    final secondAngle = -math.pi / 2 + second * math.pi / 30;
+
+    return (hour: hourAngle, minute: minuteAngle, second: secondAngle);
+  }
+
+  Animatable<double> _createAngleTween(double begin, double end) {
+    var targetAngle = end;
+    // Ensure the animation always moves clockwise by adding a full circle (2 * pi)
+    // if the target angle is smaller than the beginning angle.
+    if (targetAngle < begin) {
+      targetAngle += 2 * math.pi;
+    }
+    return Tween<double>(begin: begin, end: targetAngle).chain(CurveTween(curve: Curves.easeInOut));
+  }
+
+  /// Starts the clock animation.
+  ///
+  /// Transitions the clock from the `idle` state to `catchingUp`, initiating
+  /// a [animationDuration] animation to synchronize with the current time.
+  void start() {
+    if (_state != _ClockState.idle) return;
+    _animationStartTime = DateTime.now();
+    final targetTime = _animationStartTime.add(animationDuration);
+
+    final startAngles = _getAnglesFromTime(_clockTime);
+    final targetAngles = _getAnglesFromTime(targetTime);
+
+    _hourTween = _createAngleTween(startAngles.hour, targetAngles.hour);
+    _minuteTween = _createAngleTween(startAngles.minute, targetAngles.minute);
+    _secondTween = _createAngleTween(startAngles.second, targetAngles.second);
+
+    _state = _ClockState.catchingUp;
+    _ticker ??= Ticker(_onTick);
+    _ticker?.start();
+  }
+
+  /// Stops the clock animation and resets it to the initial time.
+  ///
+  /// Transitions the clock to the `idle` state.
+  void stop() {
+    if (_state == _ClockState.idle) return;
+    _state = _ClockState.idle;
+    _ticker?.stop();
+    _clockTime = _initTime;
+    _progress = 0.0;
+    onUpdate();
+  }
+
+  /// Called by the ticker on each frame to update the animation state.
+  void _onTick(Duration elapsed) {
+    final now = DateTime.now();
+    switch (_state) {
+      case _ClockState.idle:
+        break;
+      case _ClockState.catchingUp:
+        final animationElapsed = now.difference(_animationStartTime);
+        if (animationElapsed >= animationDuration) {
+          _state = _ClockState.running;
+          _clockTime = now;
+          _progress = 1;
+          onUpdate();
+        } else {
+          _progress = animationElapsed.inMicroseconds / animationDuration.inMicroseconds;
+          onUpdate();
+        }
+        break;
+      case _ClockState.running:
+        _clockTime = now;
+        onUpdate();
+        break;
+    }
+  }
+
+  /// Releases the resources used by this animator.
+  void dispose() {
+    _ticker?.dispose();
   }
 }
