@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/svg.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sandbox/icons/game_controller.dart';
+import 'package:sandbox/gen/assets.gen.dart';
+import 'package:sandbox/generated/painters/calendar_painter.dart';
+import 'package:sandbox/generated/painters/game_controller_painter.dart';
+import 'package:sandbox/generated/painters/gift_painter.dart';
+import 'package:sandbox/generated/painters/thumbs_up_painter.dart';
 
 void main() {
   group('Icons golden test', () {
@@ -13,17 +18,17 @@ void main() {
     //   await tester.pumpWidget(
     //      MaterialApp(
     //       home: Scaffold(
-    //         body: Center(child: SvgPicture.asset(Assets.icons.gameController, width: 512, height: 512)),
+    //         body: Center(child: SvgPicture.asset(Assets.icons.thumbsUp)),
     //       ),
     //     ),
     //   );
 
-    //   await expectLater(find.byType(SvgPicture), matchesGoldenFile('goldenicons/game_controller.png'));
+    //   await expectLater(find.byType(SvgPicture), matchesGoldenFile('goldenicons/thumbsUp.png'));
     // });
     testWidgets('GameController', (tester) async {
-      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: Center(child: GameController()))));
+      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: Center(child: ThumbsUp()))));
 
-      await expectLater(find.byType(GameController), matchesGoldenFile('goldenicons/game_controller.png'));
+      await expectLater(find.byType(ThumbsUp), matchesGoldenFile('goldenicons/thumbsUp.png'));
     });
   });
 }
